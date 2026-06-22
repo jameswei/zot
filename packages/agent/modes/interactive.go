@@ -508,6 +508,9 @@ func NewInteractive(cfg InteractiveConfig) *Interactive {
 			i.view.TailLimit = initialResumeTailLimit
 		}
 	}
+	if cfg.AutoSwarmEnabled != nil && *cfg.AutoSwarmEnabled {
+		i.applyAutoSwarmTool(true)
+	}
 	return i
 }
 
@@ -4175,9 +4178,10 @@ func (i *Interactive) swapModel(prov, model string, builder func(string, string)
 	// to invalidate.
 	i.mu.Unlock()
 	// The new agent was built off the base tool registry, so any
-	// dynamically-registered tools (telegram_send_*) need to be
-	// reattached. applyTelegramTools is a no-op when the bridge is
-	// idle so the cross-provider path still works on a vanilla setup.
+	// dynamically-registered tools need to be reattached. The apply
+	// helpers are no-ops when their feature is inactive, so the
+	// cross-provider path still works on a vanilla setup.
+	i.applyAutoSwarmTool(i.autoSwarmEnabled())
 	i.applyTelegramTools(i.telegramBridge != nil && i.telegramBridge.Active())
 	if i.cfg.PersistModel != nil {
 		i.cfg.PersistModel(p, md)
@@ -4206,6 +4210,7 @@ func (i *Interactive) handleAuthEvent(ev auth.Event) {
 		i.statusErr = ""
 		i.statusOK = "logged in to " + ev.Provider + " via " + ev.Method
 		i.mu.Unlock()
+		i.applyAutoSwarmTool(i.autoSwarmEnabled())
 		i.applyTelegramTools(i.telegramBridge != nil && i.telegramBridge.Active())
 		i.dialog.ShowResult(true, "")
 	}
@@ -5269,6 +5274,10 @@ func (i *Interactive) applyAutoSwarmSystemPrompt(active bool) {
 // when /settings -> auto-swarm is enabled. Mirrors applyTelegramTools'
 // snapshot+mutate pattern so extension tools and /reload-ext additions
 // survive a toggle.
+func (i *Interactive) autoSwarmEnabled() bool {
+	return i.cfg.AutoSwarmEnabled != nil && *i.cfg.AutoSwarmEnabled
+}
+
 func (i *Interactive) applyAutoSwarmTool(active bool) {
 	if i.agent == nil {
 		return
@@ -5283,9 +5292,11 @@ func (i *Interactive) applyAutoSwarmTool(active bool) {
 	}
 	if active && i.cfg.Swarm != nil {
 		next["swarm_spawn"] = &tools.SwarmSpawnTool{
-			Swarm:     i.cfg.Swarm,
-			Enabled:   func() bool { return true },
-			OnSpawned: i.trackSwarmAgent,
+			Swarm:           i.cfg.Swarm,
+			Enabled:         func() bool { return true },
+			DefaultModel:    func() string { return i.cfg.Model },
+			DefaultProvider: func() string { return i.cfg.Provider },
+			OnSpawned:       i.trackSwarmAgent,
 		}
 	}
 	i.agent.SetTools(next)
